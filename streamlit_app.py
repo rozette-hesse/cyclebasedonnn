@@ -3,7 +3,8 @@ import pandas as pd
 from datetime import datetime
 from keras.models import load_model
 import numpy as np
-from scripts.utils import build_dataset, evaluate_predictions
+from utils import build_dataset, evaluate_predictions
+
 
 st.set_page_config(page_title="Cycle Predictor AI", layout="centered")
 st.title("🩸 AI-Powered Menstrual Cycle Predictor")
