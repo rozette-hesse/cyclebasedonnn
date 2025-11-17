@@ -1,50 +1,49 @@
+# streamlit_app.py
+
 import streamlit as st
 import numpy as np
 from keras.models import load_model
 from datetime import datetime, timedelta
 from utils import calculate_lengths, create_dataset
 
-# Load pre-trained model
-model = load_model("models/lstm_trained_model.h5")
-
 st.title("Menstrual Cycle Predictor")
-st.write("Enter at least 3 periods to predict the next one.")
 
-# Input
-periods = []
-num_periods = st.number_input("How many past periods do you want to input?", min_value=3, max_value=10, value=3)
+# === USER INPUT ===
+st.write("Enter at least **4** period ranges (start and end):")
 
-with st.form("period_form"):
-    for i in range(num_periods):
-        st.subheader(f"Period #{i+1}")
+dates = []
+for i in range(4):
+    col1, col2 = st.columns(2)
+    with col1:
         start = st.date_input(f"Start Date {i+1}", key=f"start_{i}")
+    with col2:
         end = st.date_input(f"End Date {i+1}", key=f"end_{i}")
-        periods.append((start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")))
-    submitted = st.form_submit_button("Predict Next Period")
+    if start and end and start <= end:
+        dates.append((str(start), str(end)))
 
-if submitted:
-    try:
-        # Prepare data
-        cycle_lengths, m_lengths = calculate_lengths(periods)
-        data = np.array([[c, m] for c, m in zip(cycle_lengths, m_lengths)])
+if len(dates) < 4:
+    st.warning("Please enter at least 4 valid period entries to make a prediction.")
+    st.stop()
 
-        if len(data) < 3:
-            st.error("You need to input at least 4 periods to compute 3 sequences.")
-        else:
-            x, _ = create_dataset(data, 3)
-            last_seq = np.expand_dims(data[-3:], axis=0)
-            y_pred = model.predict(last_seq, verbose=0)[0]
+# === PREPROCESS ===
+cycle_lengths, m_lengths = calculate_lengths(dates)
+data = np.array([[c, m] for c, m in zip(cycle_lengths, m_lengths)])
+X, _ = create_dataset(data, 3)
+X = np.expand_dims(data[-3:], axis=0)
 
-            next_cycle = int(round(y_pred[0]))
-            next_menstruation = int(round(y_pred[1]))
+# === LOAD MODEL AND PREDICT ===
+model = load_model("models/lstm_trained_model.h5")
+pred = model.predict(X, verbose=0)[0]
+predicted_cycle = int(round(pred[0]))
+predicted_mens = int(round(pred[1]))
 
-            last_start = datetime.strptime(periods[-1][0], "%Y-%m-%d")
-            pred_start = last_start + timedelta(days=next_cycle)
-            pred_end = pred_start + timedelta(days=next_menstruation - 1)
+last_period_start = datetime.strptime(dates[-1][0], "%Y-%m-%d")
+predicted_start = last_period_start + timedelta(days=predicted_cycle)
+predicted_end = predicted_start + timedelta(days=predicted_mens - 1)
 
-            st.success(f"Predicted Next Period Start: {pred_start.strftime('%Y-%m-%d')}")
-            st.success(f"Predicted End: {pred_end.strftime('%Y-%m-%d')}")
-            st.info(f"Cycle Length: {next_cycle} days | Menstruation: {next_menstruation} days")
-
-    except Exception as e:
-        st.error(f"An error occurred: {str(e)}")
+# === DISPLAY RESULTS ===
+st.subheader("Prediction")
+st.write(f"**Next Period Start:** {predicted_start.strftime('%Y-%m-%d')}")
+st.write(f"**Next Period End:** {predicted_end.strftime('%Y-%m-%d')}")
+st.write(f"**Predicted Cycle Length:** {predicted_cycle} days")
+st.write(f"**Predicted Menstruation Length:** {predicted_mens} days")
