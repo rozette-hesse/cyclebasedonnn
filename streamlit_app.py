@@ -1,54 +1,50 @@
+# === streamlit_app.py ===
 import streamlit as st
-import pandas as pd
-from datetime import datetime
-from keras.models import load_model
 import numpy as np
+from keras.models import load_model
+from datetime import datetime, timedelta
 from utils import build_dataset, evaluate_predictions
 
+# Load pre-trained model
+model = load_model("models/lstm_trained_model.h5")
 
-st.set_page_config(page_title="Cycle Predictor AI", layout="centered")
-st.title("🩸 AI-Powered Menstrual Cycle Predictor")
+# Streamlit UI
+st.title("Cycle Predictor App")
+st.markdown("Upload your period log file with start and end dates (CSV: start_date,end_date)")
 
-uploaded_file = st.file_uploader("Upload a file with your period start and end dates (CSV or TXT with columns: start_date, end_date)", type=["txt", "csv"])
+uploaded_file = st.file_uploader("Choose a file", type=["txt", "csv"])
 
-if uploaded_file:
-    df = pd.read_csv(uploaded_file, sep="\t" if uploaded_file.name.endswith(".txt") else ",")
-    st.write("### Preview:")
-    st.dataframe(df.head())
+if uploaded_file is not None:
+    try:
+        # Read uploaded data
+        data = uploaded_file.read().decode("utf-8").strip().split("\n")
+        periods = [tuple(line.strip().split(",")) for line in data if line.strip()]
 
-    if "start_date" not in df.columns or "end_date" not in df.columns:
-        st.error("File must contain 'start_date' and 'end_date' columns")
-    else:
-        with st.spinner("Preparing dataset and predicting..."):
-            try:
-                # Convert to datetime and sort
-                df["start_date"] = pd.to_datetime(df["start_date"])
-                df["end_date"] = pd.to_datetime(df["end_date"])
-                df = df.sort_values("start_date")
+        if len(periods) < 4:
+            st.warning("Please upload at least 4 periods for accurate prediction.")
+        else:
+            # Preprocess
+            x, y, last_known_period = build_dataset(periods)
+            y_pred = model.predict(x[-1:])[0]
+            next_cycle = int(round(y_pred[0]))
+            next_menstruation = int(round(y_pred[1]))
 
-                # Calculate cycle and menstruation lengths
-                df["cycle_length"] = df["start_date"].shift(-1) - df["start_date"]
-                df["cycle_length"] = df["cycle_length"].dt.days
-                df["menstruation_length"] = (df["end_date"] - df["start_date"]).dt.days + 1
-                df.dropna(inplace=True)
+            # Calculate prediction
+            last_start_date = datetime.strptime(last_known_period, "%Y-%m-%d")
+            predicted_start = last_start_date + timedelta(days=next_cycle)
+            predicted_end = predicted_start + timedelta(days=next_menstruation - 1)
 
-                # Prepare input data
-                X, y, _, _ = build_dataset(df[["cycle_length", "menstruation_length"]].values.tolist())
+            st.success(f"Predicted Next Period Start: {predicted_start.date()}")
+            st.info(f"Predicted End: {predicted_end.date()}")
 
-                model = load_model("models/lstm_4000.h5")
-                y_pred = model.predict(X[-1:])
-                pred_cycle, pred_mens = map(int, map(round, y_pred[0]))
+            # Accuracy report (on full dataset)
+            all_preds = model.predict(x)
+            predicted = [[int(round(p[0])), int(round(p[1]))] for p in all_preds]
+            cycle_acc, length_acc = evaluate_predictions(y, predicted)
 
-                last_period_start = df["start_date"].iloc[-1]
-                predicted_start = last_period_start + pd.Timedelta(days=pred_cycle)
-                predicted_end = predicted_start + pd.Timedelta(days=pred_mens - 1)
+            st.write(f"**Accuracy on Past Data**")
+            st.write(f"Cycle Length Accuracy: {cycle_acc:.2f}%")
+            st.write(f"Menstruation Length Accuracy: {length_acc:.2f}%")
 
-                st.success("Prediction complete!")
-                st.markdown(f"**Predicted Next Period Start:** {predicted_start.strftime('%Y-%m-%d')}")
-                st.markdown(f"**Predicted End Date:** {predicted_end.strftime('%Y-%m-%d')}")
-                st.markdown(f"**Predicted Duration:** {pred_mens} days")
-            except Exception as e:
-                st.error(f"Something went wrong: {e}")
-
-else:
-    st.info("Please upload a valid period history file.")
+    except Exception as e:
+        st.error(f"There was an error processing the file: {e}")
