@@ -1,50 +1,58 @@
-# === streamlit_app.py ===
+# streamlit_app.py — Streamlit frontend to use trained model with user input periods
+
 import streamlit as st
 import numpy as np
-from keras.models import load_model
 from datetime import datetime, timedelta
-from utils import build_dataset, evaluate_predictions
+from keras.models import load_model
+from utils import calculate_lengths, create_dataset
 
-# Load pre-trained model
-model = load_model("models/lstm_trained_model.h5")
+st.set_page_config(page_title="Cycle Predictor", layout="centered")
+st.title("📅 Menstrual Cycle Predictor")
 
-# Streamlit UI
-st.title("Cycle Predictor App")
-st.markdown("Upload your period log file with start and end dates (CSV: start_date,end_date)")
+st.markdown("Enter at least 2 periods (start and end dates) to predict your next cycle.")
 
-uploaded_file = st.file_uploader("Choose a file", type=["txt", "csv"])
+# Input form
+with st.form("period_input_form"):
+    n_periods = st.number_input("How many past periods do you want to enter?", min_value=2, max_value=20, value=3)
+    periods = []
+    for i in range(n_periods):
+        col1, col2 = st.columns(2)
+        with col1:
+            start = st.date_input(f"Start Date {i+1}", key=f"start_{i}")
+        with col2:
+            end = st.date_input(f"End Date {i+1}", key=f"end_{i}")
+        if start and end:
+            periods.append((start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")))
 
-if uploaded_file is not None:
-    try:
-        # Read uploaded data
-        data = uploaded_file.read().decode("utf-8").strip().split("\n")
-        periods = [tuple(line.strip().split(",")) for line in data if line.strip()]
+    submitted = st.form_submit_button("Predict Next Period")
 
-        if len(periods) < 4:
-            st.warning("Please upload at least 4 periods for accurate prediction.")
+if submitted:
+    if len(periods) < 2:
+        st.error("❗ Please enter at least 2 valid period entries.")
+    else:
+        # Preprocessing
+        cycle_lengths, m_lengths = calculate_lengths(periods)
+        data = np.array([[c, m] for c, m in zip(cycle_lengths, m_lengths)])
+
+        if len(data) < 3:
+            st.error("⚠️ Need at least 3 entries to form a valid sequence for prediction.")
         else:
-            # Preprocess
-            x, y, last_known_period = build_dataset(periods)
-            y_pred = model.predict(x[-1:])[0]
+            # Dataset
+            train_x, _ = create_dataset(data, steps=3)
+            last_seq = np.expand_dims(data[-3:], axis=0)
+
+            # Load model
+            model = load_model("models/lstm_trained_model.h5")
+            y_pred = model.predict(last_seq, verbose=0)[0]
+
             next_cycle = int(round(y_pred[0]))
-            next_menstruation = int(round(y_pred[1]))
+            next_mens = int(round(y_pred[1]))
 
-            # Calculate prediction
-            last_start_date = datetime.strptime(last_known_period, "%Y-%m-%d")
-            predicted_start = last_start_date + timedelta(days=next_cycle)
-            predicted_end = predicted_start + timedelta(days=next_menstruation - 1)
+            last_start = datetime.strptime(periods[-1][0], "%Y-%m-%d")
+            predicted_start = last_start + timedelta(days=next_cycle)
+            predicted_end = predicted_start + timedelta(days=next_mens - 1)
 
-            st.success(f"Predicted Next Period Start: {predicted_start.date()}")
-            st.info(f"Predicted End: {predicted_end.date()}")
-
-            # Accuracy report (on full dataset)
-            all_preds = model.predict(x)
-            predicted = [[int(round(p[0])), int(round(p[1]))] for p in all_preds]
-            cycle_acc, length_acc = evaluate_predictions(y, predicted)
-
-            st.write(f"**Accuracy on Past Data**")
-            st.write(f"Cycle Length Accuracy: {cycle_acc:.2f}%")
-            st.write(f"Menstruation Length Accuracy: {length_acc:.2f}%")
-
-    except Exception as e:
-        st.error(f"There was an error processing the file: {e}")
+            st.success(f"✅ Predicted Start Date: {predicted_start.strftime('%Y-%m-%d')}")
+            st.info(f"Predicted End Date: {predicted_end.strftime('%Y-%m-%d')}")
+            st.markdown(f"**Cycle Length**: {next_cycle} days")
+            st.markdown(f"**Menstruation Length**: {next_mens} days")
