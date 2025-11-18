@@ -1,58 +1,81 @@
 import streamlit as st
-import numpy as np
 from keras.models import load_model
+from keras.losses import MeanSquaredError
 from datetime import datetime, timedelta
-import os
-from utils import calculate_lengths, create_dataset
+import numpy as np
 
-# Title
-st.title("Menstrual Cycle Predictor")
+# Load trained model
+model = load_model("best_model.h5", compile=False)
+model.compile(optimizer="adam", loss=MeanSquaredError())
 
-# Input form
-st.markdown("### Enter at least 2 past periods (start and end dates):")
-user_input = st.text_area("Enter one period per line as: YYYY-MM-DD,YYYY-MM-DD", height=150)
+st.title("🌸 Menstrual Cycle Predictor")
+st.write("Enter **at least 4** period start and end dates.")
 
-if user_input:
-    try:
-        # Parse user input
-        lines = user_input.strip().split("\n")
-        user_periods = [tuple(line.strip().split(",")) for line in lines if line.strip()]
+# Date input section
+period_data = []
+for i in range(1, 5):
+    col1, col2 = st.columns(2)
+    with col1:
+        start = st.date_input(f"🩸 Period {i} Start", key=f"start_{i}")
+    with col2:
+        end = st.date_input(f"🩸 Period {i} End", key=f"end_{i}")
+    if start and end and start <= end:
+        period_data.append((start, end))
 
-        # Validate format
-        for start, end in user_periods:
-            datetime.strptime(start, "%Y-%m-%d")
-            datetime.strptime(end, "%Y-%m-%d")
+more_periods = st.checkbox("➕ Add more period data")
+i = 5
+while more_periods:
+    col1, col2 = st.columns(2)
+    with col1:
+        start = st.date_input(f"Period {i} Start", key=f"start_{i}")
+    with col2:
+        end = st.date_input(f"Period {i} End", key=f"end_{i}")
+    if start and end and start <= end:
+        period_data.append((start, end))
+    i += 1
+    if not st.checkbox("Add another?"):
+        break
 
-        if len(user_periods) < 2:
-            st.warning("Please enter at least 2 valid periods.")
-        else:
-            # Calculate lengths
-            cycle_lengths, m_lengths = calculate_lengths(user_periods)
-            data = np.array([[c, m] for c, m in zip(cycle_lengths, m_lengths)])
+# Sort dates
+period_data = sorted(period_data, key=lambda x: x[0], reverse=False)
 
-            steps = min(3, len(data))
-            if len(data) >= steps:
-                train_x, _ = create_dataset(data, steps)
-                last_seq = np.expand_dims(data[-steps:], axis=0)
+# Prediction logic
+if len(period_data) >= 4:
+    user_data = []
+    for i in range(len(period_data) - 1):
+        start = period_data[i][0]
+        end = period_data[i][1]
+        next_start = period_data[i + 1][0]
+        cycle_length = (next_start - start).days
+        mens_length = (end - start).days + 1
+        user_data.append([cycle_length, mens_length])
 
-                # Load model
-                model_path = os.path.join("models", "lstm_trained_model.h5")
-                model = load_model(model_path)
+    user_input = np.array(user_data[-3:]).reshape((1, 3, 2))
+    predicted_cycle, predicted_mens = model.predict(user_input)[0]
 
-                # Predict
-                y_pred = model.predict(last_seq, verbose=0)[0]
-                next_cycle = int(round(y_pred[0]))
-                next_menstruation = int(round(y_pred[1]))
+    # Calculate current status
+    last_period_start = period_data[-1][0]
+    today = datetime.now().date()
+    days_since_last = (today - last_period_start).days
+    upcoming_cycle_start = last_period_start + timedelta(days=round(predicted_cycle))
 
-                last_period_start = datetime.strptime(user_periods[-1][0], "%Y-%m-%d")
-                predicted_start = last_period_start + timedelta(days=next_cycle)
-                predicted_end = predicted_start + timedelta(days=next_menstruation - 1)
+    if days_since_last < predicted_mens:
+        phase = "Menstrual Phase"
+    elif days_since_last < predicted_cycle / 2:
+        phase = "Follicular Phase"
+    elif days_since_last < predicted_cycle * 0.75:
+        phase = "Ovulation Phase"
+    elif days_since_last < predicted_cycle:
+        phase = "Luteal Phase"
+    else:
+        phase = "Likely New Cycle"
 
-                st.success(f"**Predicted Next Period Start:** {predicted_start.strftime('%Y-%m-%d')}")
-                st.success(f"**Predicted Next Period End:** {predicted_end.strftime('%Y-%m-%d')}")
-                st.info(f"Cycle Length: {next_cycle} days\n\nMenstruation Length: {next_menstruation} days")
-            else:
-                st.warning("Not enough data to form prediction sequence. Please enter more periods.")
-
-    except Exception as e:
-        st.error(f"Invalid input format or error occurred: {e}")
+    # Show output
+    st.subheader("🔍 Prediction Results")
+    st.markdown(f"📅 **Predicted Cycle Length**: `{round(predicted_cycle)} days`")
+    st.markdown(f"🩸 **Predicted Menstruation Length**: `{round(predicted_mens)} days`")
+    st.markdown(f"📍 **Today is Day {days_since_last}** of your current cycle.")
+    st.markdown(f"🌗 **Current Phase**: `{phase}`")
+    st.markdown(f"📆 **Next Expected Period Start**: `{upcoming_cycle_start}`")
+else:
+    st.warning("❗ Please enter at least 4 period records to get a prediction.")
